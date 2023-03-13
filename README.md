@@ -35,7 +35,7 @@ dat <- ScaleData(dat, features = rownames(dat))
 dat <- RunPCA(dat, features = VariableFeatures(object = dat))
 
 # Check number of PC components 
-g1 <- ElbowPlot(dat) + theme_few() + geom_hline(yintercept=2, linetype='dashed', alpha=0.5)
+g1 <- ElbowPlot(dat) + theme_few() + geom_hline(yintercept=2.5, linetype='dashed', alpha=0.5)
 ggsave(g1, file='elbow_plot.png')
 ```
 
@@ -46,7 +46,7 @@ Continuing on...
 
 ```R
 
-n_pcs <- 10     # went with 16 PCs
+n_pcs <- 10     # went with 10 PCs
 
 # cluster and visualize
 dat <- FindNeighbors(dat, dims = 1:n_pcs)
