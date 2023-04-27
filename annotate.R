@@ -10,14 +10,17 @@ if (length(args)==0) {
 MAX_PCS <- 60
 
 # load libraries
-lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2"), library, character.only = T)
+# sctype_env_2
+lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2",
+         "sctransform", "Signac", "EnsDb.Hsapiens.v86"), 
+         library, character.only = T)
 # test with SH-06-05
 # params <- list()
-# params$project_name <- 'SH-06-05'
+# params$project_name <- 'SH9608-ARC'
 project_name <- args[1]
 batch <- args[2]
 print(paste0("Sample name: ", project_name))
-base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/RNAonly/',project_name, '/outs/filtered_feature_bc_matrix/')
+base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',project_name, '/outs/')
 
 # make directory in figures
 batch_folder <- paste0('figures/', batch)
@@ -26,16 +29,49 @@ figure_folder <- paste0('figures/', batch, '/', project_name)
 dir.create(figure_folder)
 
 # Initialize the Seurat object with the raw (non-normalized data).
-data <- Read10X(data.dir = base_dir)
+input_data <- Read10X(data.dir = paste0(base_dir, "filtered_feature_bc_matrix/"))
 # Initialize the Seurat object with the raw (non-normalized data).
-#data <- CreateSeuratObject(counts = data$`Gene Expression`, project = project_name, min.cells = 3, min.features = 200)
-data <- CreateSeuratObject(counts = data, project = project_name, min.cells = 3, min.features = 200)
+
+if (length(data) > 1){
+    rna_counts <- input_data[['Gene Expression']]
+    atac_counts <- input_data[['Peaks']]
+    data <- CreateSeuratObject(counts = rna_counts, project = project_name);
+    #message("Using RNA data only")
+    grange.counts <- StringToGRanges(rownames(atac_counts), sep = c(":", "-"))
+    grange.use <- seqnames(grange.counts) %in% standardChromosomes(grange.counts)
+    atac_counts <- atac_counts[as.vector(grange.use), ]
+    annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v86)
+    genome(annotations) <- "hg38"
+    seqlevelsStyle(annotations) <- 'UCSC'
+    #data.atac <- CreateAssayObject(atac_counts[, colnames(x = data)])
+    #data  <- NormalizeData(data, assay = "Peaks", normalization.method = "CLR")
+    frag.file <- paste0(base_dir, "atac_fragments.tsv.gz")
+    chrom_assay <- CreateChromatinAssay(
+        counts = atac_counts,
+        sep = c(":", "-"),
+        genome = 'hg38',
+        fragments = frag.file,
+        min.cells = 3,
+        annotation = annotations
+    )
+    data[['ATAC']] <- chrom_assay
+} else {
+    data <- CreateSeuratObject(counts = input_data, project = project_name, min.cells = 3, min.features = 200)
+}
+
+pdf(paste0(figure_folder,'/', project_name, '_qc', '.pdf'))
+VlnPlot(data, features = c("nCount_ATAC", "nCount_RNA","percent.mt"), ncol = 3,
+  log = TRUE, pt.size = 0) + NoLegend()
+dev.off()
+
 data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
-data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
-data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
+# data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
+# data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
 
 # scale and run PCA
-data <- ScaleData(data, features = rownames(data))
+#data <- ScaleData(data, features = rownames(data))
+
+
 data <- RunPCA(data, npcs = MAX_PCS, features = VariableFeatures(object = data))
 
 # Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
