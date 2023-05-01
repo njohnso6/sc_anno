@@ -1,0 +1,10 @@
+bioconductor-ensdb.hsapiens.v86
+bioconductor-biovizbase
+r-seurat
+r-dplyr
+r-signac
+r-ggplot2
+r-hgnchelper
+r-openxlsx
+r-sctransform
+r-future
