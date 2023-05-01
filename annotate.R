@@ -1,4 +1,9 @@
 #!/usr/bin/env Rscript
+
+# This requires two argumens
+# @arg[1] a pathway to a folder containing an outs folder of cellranger output
+# @arg[2] a sample_name for this run
+
 args = commandArgs(trailingOnly=TRUE)
 
 # test if there is at least one argument: if not, return an error
@@ -14,28 +19,34 @@ MAX_PCS <- 60
 lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2",
          "sctransform", "Signac", "EnsDb.Hsapiens.v86"), 
          library, character.only = T)
-# test with SH-06-05
 # params <- list()
-# params$project_name <- 'SH9608-ARC'
-project_name <- args[1]
-batch <- args[2]
-print(paste0("Sample name: ", project_name))
-base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',project_name, '/outs/')
+print(paste0("Sample name: ", sample_name))
+base_dir <- paste0(args[1], '/outs/')
+# test with sample <- 'SH9608-ARC' which is in batch1
+#
+# base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',sample_name, '/outs/')
+sample_name <- args[2]
 
 # make directory in figures
-batch_folder <- paste0('figures/', batch)
-dir.create(batch_folder)
-figure_folder <- paste0('figures/', batch, '/', project_name)
+if (!dir.exists('figures/') {
+        dir.create('figures')
+}
+figure_folder <- paste0('figures/', sample_name)
 dir.create(figure_folder)
 
 # Initialize the Seurat object with the raw (non-normalized data).
 input_data <- Read10X(data.dir = paste0(base_dir, "filtered_feature_bc_matrix/"))
-# Initialize the Seurat object with the raw (non-normalized data).
 
-if (length(data) > 1){
+library(GenomicFeatures)
+tx <- makeTxDvFromGFF()
+transcripts(tx)
+
+# Whether the data are multiome or unimodal
+# If they are multiome set multiome <- TRUE
+if (length(input_data) > 1){
     rna_counts <- input_data[['Gene Expression']]
     atac_counts <- input_data[['Peaks']]
-    data <- CreateSeuratObject(counts = rna_counts, project = project_name);
+    data <- CreateSeuratObject(counts = rna_counts, project = sample_name);
     #message("Using RNA data only")
     grange.counts <- StringToGRanges(rownames(atac_counts), sep = c(":", "-"))
     grange.use <- seqnames(grange.counts) %in% standardChromosomes(grange.counts)
@@ -52,19 +63,50 @@ if (length(data) > 1){
         genome = 'hg38',
         fragments = frag.file,
         min.cells = 3,
-        annotation = annotations
+        annotation = annotations,
+        validate.fragments = TRUE
     )
     data[['ATAC']] <- chrom_assay
 } else {
-    data <- CreateSeuratObject(counts = input_data, project = project_name, min.cells = 3, min.features = 200)
+    data <- CreateSeuratObject(counts = input_data, project = sample_name, min.cells = 3, min.features = 200)
+    data <- RunPCA(data, npcs = MAX_PCS, features = VariableFeatures(object = data))
+
+    # Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
+    pdf(paste0(figure_folder,'/', sample_name, '_elbow', '.pdf'))
+    ElbowPlot(data, ndims=MAX_PCS,reduction='pca')
+    dev.off()
+    
+    data <- JackStraw(data, dims=MAX_PCS, num.replicate=80, maxit=900)
+    data <- ScoreJackStraw(data, dims=1:MAX_PCS)
+    upper_b <- min(which(JS(data[['pca']], 'overall')[,2] >= 0.05))
+    print(paste0("total number of PCs used. 
+                Make sense? : ", upper_b))
+    if (upper_b == 'Inf'){
+        upper_b <- MAX_PCS
+    }
+    pdf(paste0(figure_folder,'/', sample_name, '_jackstraw', '.pdf'))
+    JackStrawPlot(data,dims = 1:upper_b)
+    dev.off()
+    
+    
+    # cluster and visualize
+    data <- FindNeighbors(data, dims = 1:upper_b)
+    data <- FindClusters(data, resolution = 0.2)
+    data <- RunUMAP(data, dims = 1:upper_b)
+    
+    pdf(paste0(figure_folder,'/', sample_name, '_cluster', '.pdf'))
+    DimPlot(data, reduction = "umap")
+    dev.off()
 }
 
-pdf(paste0(figure_folder,'/', project_name, '_qc', '.pdf'))
+# NOTE: Need to figure out when to take these out and when to simply display
+# People seem divided on this.
+data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
+pdf(paste0(figure_folder,'/', sample_name, '_qc', '.pdf'))
 VlnPlot(data, features = c("nCount_ATAC", "nCount_RNA","percent.mt"), ncol = 3,
   log = TRUE, pt.size = 0) + NoLegend()
 dev.off()
 
-data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
 # data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
 # data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
 
@@ -72,34 +114,6 @@ data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
 #data <- ScaleData(data, features = rownames(data))
 
 
-data <- RunPCA(data, npcs = MAX_PCS, features = VariableFeatures(object = data))
-
-# Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
-pdf(paste0(figure_folder,'/', project_name, '_elbow', '.pdf'))
-ElbowPlot(data, ndims=MAX_PCS,reduction='pca')
-dev.off()
-
-data <- JackStraw(data, dims=MAX_PCS, num.replicate=80, maxit=900)
-data <- ScoreJackStraw(data, dims=1:MAX_PCS)
-upper_b <- min(which(JS(data[['pca']], 'overall')[,2] >= 0.05))
-print(paste0("total number of PCs used. 
-            Make sense? : ", upper_b))
-if (upper_b == 'Inf'){
-    upper_b <- MAX_PCS
-}
-pdf(paste0(figure_folder,'/', project_name, '_jackstraw', '.pdf'))
-JackStrawPlot(data,dims = 1:upper_b)
-dev.off()
-
-
-# cluster and visualize
-data <- FindNeighbors(data, dims = 1:upper_b)
-data <- FindClusters(data, resolution = 0.2)
-data <- RunUMAP(data, dims = 1:upper_b)
-
-pdf(paste0(figure_folder,'/', project_name, '_cluster', '.pdf'))
-DimPlot(data, reduction = "umap")
-dev.off()
 
 # load gene set preparation function
 source("https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R")
@@ -119,6 +133,11 @@ gs_list = gene_sets_prepare(db_, tissue)
 es.max = sctype_score(scRNAseqData = data[["RNA"]]@scale.data, scaled = TRUE, 
                       gs = gs_list$gs_positive, gs2 = gs_list$gs_negative) 
 
+# NOTE: FOR NOW JUST USE THE SAME NAMES BECAUSE WE HAVE NO A PRIORI REASON TO MODIFY
+# As soon as we do, we can change the names. But that will be a next step
+# See https://stuartlab.org/signac/articles/pbmc_vignette.html#create-a-gene-activity-matrix for information on how to get ATAC data to reasonable matching to rnaseq for assimilation into this measure.
+es.max_ATAC = sctype_score(scRNAseqData = data[['ATAC']]@counts, scaled=FALSE,gs_list$gs_positive, gs2=gs_list$gs_negative)
+
 # NOTE: scRNAseqData parameter should correspond to your input scRNA-seq matrix. 
 # In case Seurat is used, it is either data[["RNA"]]@scale.data (default), data[["SCT"]]@scale.data, in case sctransform is used for normalization,
 # or data[["integrated"]]@scale.data, in case a joint analysis of multiple single-cell datasets is performed.
@@ -135,7 +154,7 @@ marker_scores <- merge(sctype_scores, markers, on="cluster")
 marker_scores <- marker_scores[c('cluster','type','ncells','p_val','avg_log2FC','pct.1','pct.2','p_val_adj','gene')]
 # sort by p_Adj_values
 markers <- arrange(marker_scores, cluster, p_val_adj)
-write.csv(markers, file=paste0(figure_folder, '/', project_name, '_markers', '.csv'), row.names=FALSE)
+write.csv(markers, file=paste0(figure_folder, '/', sample_name, '_markers', '.csv'), row.names=FALSE)
 
 # set low-confident (low ScType score) clusters to "unknown"
 sctype_scores$type[as.numeric(as.character(sctype_scores$scores)) < sctype_scores$ncells/4] = "Unknown"
@@ -147,12 +166,12 @@ for(j in unique(sctype_scores$cluster)){
   data@meta.data$customclassif[data@meta.data$seurat_clusters == j] = as.character(cl_type$type[1])
 }
 g3 <- DimPlot(data, reduction = "umap", label = TRUE, repel = TRUE, group.by = 'customclassif')
-ggsave(g3, file=paste0(figure_folder,'/', project_name, '_umap', '.pdf'), width=25, height=18, units='cm')
+ggsave(g3, file=paste0(figure_folder,'/', sample_name, '_umap', '.pdf'), width=25, height=18, units='cm')
 
 # output the number of each cell type
 cluster_counts <- data@meta.data %>%
     count(customclassif)
-write.csv(cluster_counts, file=paste0(figure_folder, '/', project_name, '_type_counts', '.csv'), row.names=FALSE)
+write.csv(cluster_counts, file=paste0(figure_folder, '/', sample_name, '_type_counts', '.csv'), row.names=FALSE)
 
 # load libraries
 #
@@ -217,11 +236,11 @@ gggr<- ggraph(mygraph, layout = 'circlepack', weight=I(ncells)) +
       axis.title.y=element_blank(),
       plot.background = element_blank())
 
-ggsave(gggr, file=paste0(figure_folder, '/', project_name, '-bubble.png'), width=25, height=25, units='cm')
+ggsave(gggr, file=paste0(figure_folder, '/', sample_name, '-bubble.png'), width=25, height=25, units='cm')
 
 library(cowplot)
 g4 <-  plot_grid(g3, gggr, labels = c('A', 'B'), label_size = 12, rel_widths=c(0.45, 0.55))
-ggsave(g4, file=paste0(figure_folder, '/', project_name, '-clusters_combined.png'), width=45, height=25, units='cm')
+ggsave(g4, file=paste0(figure_folder, '/', sample_name, '-clusters_combined.png'), width=45, height=25, units='cm')
 
 
 if(FALSE){

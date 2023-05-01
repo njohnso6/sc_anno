@@ -3,3 +3,5 @@
 *.e
 *.o
 *slurm_out*
+figures/*
+nightly*

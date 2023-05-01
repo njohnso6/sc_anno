@@ -1,34 +1,13 @@
-# Testing single cell annotation
+Create an environment with at least what is in the requirements.txt file.
 
 
-Retrieve data from (already configured) rclone, hosted on google drive
+TODO: 1. Make automatic QC
+    2. Add in results for ATAC
+    3. Make separate names for ATAC genes in the file
 
-```bash
-module load rclone
 
-rclone copy --drive-shared-with-me  dtigoogledrive:/Xylena_Test_Data/filtered_feature_matrix/features.tsv.gz .
-rclone copy --drive-shared-with-me  dtigoogledrive:/Xylena_Test_Data/filtered_feature_matrix/barcodes.tsv.gz .
-rclone copy --drive-shared-with-me  dtigoogledrive:/Xylena_Test_Data/filtered_feature_matrix/matrix.mtx.gz .
+Run Rscript annotate.R /path/to/folder/with/outs sample_name
 
-wget "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/gene_sets_prepare.R"
-wget "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/R/sctype_score_.R"
-wget "https://raw.githubusercontent.com/IanevskiAleksandr/sc-type/master/ScTypeDB_full.xlsx"
-```
 
-Run annotation with [`annotate.R`](annotate.R). Automatically loads `barcodes.tsv.gz`, `features.tsv.gz` and `matrix.mtx.gz`.
-
-```bash
-module load R/4.2
-Rscript annotate.R
-```
-
-![](elbow_plot.png)
-
-![](umap_1.png)
-
-![](umap_2.png)
-
-![](bubble.png)
-
-![](clusters_combined.png)
+Also included here are some example scripts for using cell_ranger on Biowulf
 
