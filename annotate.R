@@ -17,10 +17,16 @@ MAX_PCS <- 60
 # load libraries
 # sctype_env_2
 lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2",
-         "sctransform", "Signac", "EnsDb.Hsapiens.v86"), 
+         "sctransform", "Signac", "EnsDb.Hsapiens.v86", "data.table"), 
          library, character.only = T)
+
+soup_rate <- 0.20
+reticulate::source_python('scripts/utility/scrublet_py.py')
+
 # params <- list()
 print(paste0("Sample name: ", sample_name))
+# NOTE: IF MANUAL do base_dir <- dir
+dir <- '/data/CARD_singlecell/Brain_atlas/NABEC_multiome/batch1/Multiome/SH9608-ARC'
 base_dir <- paste0(args[1], '/outs/')
 # test with sample <- 'SH9608-ARC' which is in batch1
 #
@@ -36,6 +42,42 @@ dir.create(figure_folder)
 
 # Initialize the Seurat object with the raw (non-normalized data).
 input_data <- Read10X(data.dir = paste0(base_dir, "filtered_feature_bc_matrix/"))
+
+    adj.matrix <- suppressWarnings(SoupCorrect(raw.input.list[[dataset]], filtered.input.list[[dataset]], contamination_rate=soup_rate))
+    object <- CreateSeuratObject(adj.matrix, min.cells=0, min.features=0, project=dataset)
+
+    doublet_rate <- (ncol(object) / 1000) * 0.008
+    object[['percent.mt']] <- PercentageFeatureSet(object, pattern='^MT-')
+    object[['percent.rb']] <- PercentageFeatureSet(object, pattern='^RP[SL]')
+
+    m <- copy(object@meta.data)
+    setDT(m, keep.rownames='cells')
+
+    m[, laneID := rep(dataset, nrow(m))]
+
+    m[,
+        `:=` (
+            laneID=tstrsplit(laneID, '_')[[1]],
+            condition=tstrsplit(laneID, '_')[[2]],
+            timepoint=tstrsplit(laneID, '_')[[3]]
+            )
+    ]
+
+    lane <- m[, laneID]
+    condition <- m[, condition]
+    timepoint <- m[, timepoint]
+
+    names(lane) <- names(condition) <- names(timepoint) <- m[, cells]
+
+    object %>% 
+        
+        AddMetaData(metadata=factor(lane), col.name='laneID') %>% 
+        AddMetaData(metadata=factor(condition), col.name='condition') %>% 
+        AddMetaData(metadata=factor(timepoint), col.name='timepoint') %>%
+        
+        scrublet(n_prin_comps=30, expected_doublet_rate=doublet_rate) 
+
+}, simplify=FALSE)
 
 library(GenomicFeatures)
 tx <- makeTxDvFromGFF()
@@ -69,6 +111,7 @@ if (length(input_data) > 1){
     data[['ATAC']] <- chrom_assay
 } else {
     data <- CreateSeuratObject(counts = input_data, project = sample_name, min.cells = 3, min.features = 200)
+    data <- ScaleData(data, features = rownames(data))
     data <- RunPCA(data, npcs = MAX_PCS, features = VariableFeatures(object = data))
 
     # Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
@@ -111,7 +154,6 @@ dev.off()
 # data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
 
 # scale and run PCA
-#data <- ScaleData(data, features = rownames(data))
 
 
 
@@ -222,7 +264,7 @@ nodes = nodes[,c("cluster", "ncells", "Colour", "ord", "shortName", "realname")]
 mygraph <- graph_from_data_frame(edges, vertices=nodes)
 
 # Make the graph
-gggr<- ggraph(mygraph, layout = 'circlepack', weight=I(ncells)) + 
+gggr <- ggraph(mygraph, layout = 'circlepack', weight=I(ncells)) + 
   geom_node_circle(aes(filter=ord==1,fill=I("#F5F5F5"), colour=I("#D3D3D3")), alpha=0.9) +
   geom_node_circle(aes(filter=ord==2,fill=I(Colour), colour=I("#D3D3D3")), alpha=0.9) +
   theme_few() +
@@ -250,3 +292,36 @@ if(FALSE){
 }
 
 quit()
+
+
+working_dir <- '/data/ShernData/CS032989_Taylor_Kondo/'; setwd(working_dir)
+
+
+
+# Need to figure out how to get the integratedrna, apparently both things are in there
+# At least in looking at the rpca.R and rlsi.R files
+
+DefaultAssay(object) <- 'integratedrna'
+VariableFeatures(object) <- rownames(object)
+
+object <- object %>% 
+            ScaleData(verbose=FALSE) %>% RunPCA(verbose=FALSE) %>% 
+            FindNeighbors(reduction='pca', dims=1:50) %>% FindClusters(algorithm=3, resolution=0.5) %>% StashIdent(save.name='rna_clusters') %>% 
+            
+            RunUMAP(reduction='pca', dims=1:50, reduction.name='umap.rna', reduction.key='rnaUMAP_') %>%
+            RunUMAP(reduction='integrated_lsi', dims=2:50, reduction.name='umap.atac', reduction.key='atacUMAP_')
+
+
+
+object <- object %>% 
+            FindMultiModalNeighbors(reduction.list=list('pca', 'integrated_lsi'), dims.list=list(1:50, 2:50)) %>% 
+            FindClusters(graph.name='wsnn', algorithm=3, resolution=0.5) %>% StashIdent(save.name='wnn_clusters') %>% 
+            RunUMAP(nn.name='weighted.nn', reduction.name='wnn.umap', reduction.key='wnnUMAP_')
+
+object[['seurat_clusters']] <- NULL
+
+
+saveRDS(object, snakemake@output[['seurat_object']])
+
+
+
