@@ -20,11 +20,11 @@ lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2",
          "sctransform", "Signac", "EnsDb.Hsapiens.v86"), 
          library, character.only = T)
 # params <- list()
-#base_dir <- paste0(args[1], '/outs/')
-sample_name <- "KEN1070-ARC"
-batch <- "batch1"
-base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',sample_name, '/outs/')
-#sample_name <- args[2]
+base_dir <- paste0(args[1], '/outs/')
+#sample_name <- "KEN1070-ARC"
+#batch <- "batch1"
+#base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',sample_name, '/outs/')
+sample_name <- args[2]
 print(paste0("Sample name: ", sample_name))
 print(paste0("Base_Dir:", base_dir))
 # test with sample <- 'SH9608-ARC' which is in batch1
