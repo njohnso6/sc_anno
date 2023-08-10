@@ -20,15 +20,18 @@ lapply(c("dplyr","Seurat","HGNChelper", "openxlsx", "ggplot2",
          "sctransform", "Signac", "EnsDb.Hsapiens.v86"), 
          library, character.only = T)
 # params <- list()
+#base_dir <- paste0(args[1], '/outs/')
+sample_name <- "KEN1070-ARC"
+batch <- "batch1"
+base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',sample_name, '/outs/')
+#sample_name <- args[2]
 print(paste0("Sample name: ", sample_name))
-base_dir <- paste0(args[1], '/outs/')
+print(paste0("Base_Dir:", base_dir))
 # test with sample <- 'SH9608-ARC' which is in batch1
 #
-# base_dir <- paste0('/data/CARD_singlecell/Brain_atlas/NABEC_multiome/', batch, '/Multiome/',sample_name, '/outs/')
-sample_name <- args[2]
 
 # make directory in figures
-if (!dir.exists('figures/') {
+if (!dir.exists('figures/')) {
         dir.create('figures')
 }
 figure_folder <- paste0('figures/', sample_name)
@@ -37,16 +40,42 @@ dir.create(figure_folder)
 # Initialize the Seurat object with the raw (non-normalized data).
 input_data <- Read10X(data.dir = paste0(base_dir, "filtered_feature_bc_matrix/"))
 
-library(GenomicFeatures)
-tx <- makeTxDvFromGFF()
-transcripts(tx)
-
 # Whether the data are multiome or unimodal
 # If they are multiome set multiome <- TRUE
 if (length(input_data) > 1){
     rna_counts <- input_data[['Gene Expression']]
     atac_counts <- input_data[['Peaks']]
     data <- CreateSeuratObject(counts = rna_counts, project = sample_name);
+    data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
+    data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
+    data <- ScaleData(data, features = rownames(data))
+    data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
+    data <- RunPCA(data, npcs = MAX_PCS, features = rownames(data))
+    pdf(paste0(figure_folder,'/', sample_name, '_elbow', '.pdf'))
+    ElbowPlot(data, ndims=MAX_PCS,reduction='pca')
+    dev.off()
+    
+    data <- JackStraw(data, dims=MAX_PCS, num.replicate=80, maxit=900)
+    data <- ScoreJackStraw(data, dims=1:MAX_PCS)
+    upper_b <- min(which(JS(data[['pca']], 'overall')[,2] >= 0.05))
+    print(paste0("total number of PCs used. 
+                Make sense? : ", upper_b))
+    if (upper_b == 'Inf'){
+        upper_b <- MAX_PCS
+    }
+    pdf(paste0(figure_folder,'/', sample_name, '_jackstraw', '.pdf'))
+    JackStrawPlot(data,dims = 1:upper_b)
+    dev.off()
+    
+    
+    # cluster and visualize
+    data <- FindNeighbors(data, dims = 1:upper_b)
+    data <- FindClusters(data, resolution = 0.2)
+    data <- RunUMAP(data, dims = 1:upper_b)
+    
+    pdf(paste0(figure_folder,'/', sample_name, '_cluster', '.pdf'))
+    DimPlot(data, reduction = "umap")
+    dev.off()
     #message("Using RNA data only")
     grange.counts <- StringToGRanges(rownames(atac_counts), sep = c(":", "-"))
     grange.use <- seqnames(grange.counts) %in% standardChromosomes(grange.counts)
@@ -69,7 +98,12 @@ if (length(input_data) > 1){
     data[['ATAC']] <- chrom_assay
 } else {
     data <- CreateSeuratObject(counts = input_data, project = sample_name, min.cells = 3, min.features = 200)
-    data <- RunPCA(data, npcs = MAX_PCS, features = VariableFeatures(object = data))
+    data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
+    data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 10000)
+    data <- ScaleData(data, features = rownames(data))
+    data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
+    data <- RunPCA(data, npcs = MAX_PCS, features = rownames(data))
+    #message("Using RNA data only")
 
     # Check number of PC components (we selected 10 PCs for downstream analysis, based on Elbow plot)
     pdf(paste0(figure_folder,'/', sample_name, '_elbow', '.pdf'))
